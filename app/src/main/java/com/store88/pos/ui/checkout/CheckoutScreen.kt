@@ -147,6 +147,7 @@ fun CheckoutScreen(ui: UiState, vm: PosViewModel) {
                 item { MoreBtn("🖨 Print / 列印") { vm.printLastReceipt() } }
                 item { MoreBtn("💰 Drawer / 開箱") { vm.openDrawer() } }
                 item { MoreBtn("📺 客顯") { vm.setShowCustomerPreview(true) } }
+                item { MoreBtn("🔄 Sync / 同步") { vm.syncNow() } }
                 item { MoreBtn("🧾 Txns / 交易") { vm.setScreen(Screen.Transactions) } }
                 item { MoreBtn("📅 Day Close / 日結") { vm.setScreen(Screen.DayClose) } }
             }

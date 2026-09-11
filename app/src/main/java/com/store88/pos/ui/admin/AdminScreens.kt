@@ -1166,13 +1166,17 @@ fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
     var port by remember(ui.printer) { mutableStateOf(ui.printer.port.toString()) }
     var dry by remember(ui.printer) { mutableStateOf(ui.printer.dryRun) }
     var paper by remember(ui.printer) { mutableStateOf(ui.printer.paperWidthMm) }
-    AdminShell("Printer / 打印機", "LAN ESC/POS printer IP and cash drawer kick. / 網絡打印機及錢箱。", ui, vm) {
+    var apiBase by remember(ui.sync) { mutableStateOf(ui.sync.baseUrl) }
+    var apiKey by remember(ui.sync) { mutableStateOf(ui.sync.apiKey) }
+    var shopCode by remember(ui.sync) { mutableStateOf(ui.sync.shopCode) }
+    var periodic by remember(ui.sync) { mutableStateOf(ui.sync.periodicUploadEnabled) }
+    AdminShell("Printer / Sync", "LAN printer + multi-shop sync. / 打印機及多店同步。", ui, vm) {
         Text(vm.bi("Printer IP (LAN ESC/POS)", "打印機 IP"), color = TextMuted)
         BasicTextField(host, { host = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
         Text("Port", color = TextMuted)
         BasicTextField(port, { port = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
-        Spacer(modifier = Modifier.height(8.dp))
+        Spacer(Modifier.height(8.dp))
         Row(verticalAlignment = Alignment.CenterVertically) {
             Switch(checked = dry, onCheckedChange = { dry = it })
             Text(vm.bi("Dry-run (no hardware)", "模擬模式（無硬件）"))
@@ -1181,7 +1185,7 @@ fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
             Button(onClick = { paper = 80 }) { Text("80mm") }
             Button(onClick = { paper = 58 }) { Text("58mm") }
         }
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(Modifier.height(12.dp))
         Button(
             onClick = {
                 vm.savePrinter(
@@ -1196,20 +1200,61 @@ fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
             },
             colors = ButtonDefaults.buttonColors(containerColor = Teal),
             modifier = Modifier.fillMaxWidth(),
-        ) { Text(vm.bi("Save", "儲存")) }
-        Spacer(modifier = Modifier.height(8.dp))
+        ) { Text(vm.bi("Save printer", "儲存打印機")) }
+        Spacer(Modifier.height(8.dp))
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             Button(onClick = { vm.pingPrinter() }) { Text(vm.bi("Test connection", "測試連線")) }
             Button(onClick = { vm.testPrint() }) { Text(vm.bi("Test print", "測試列印")) }
             Button(onClick = { vm.openDrawer() }) { Text(vm.bi("Test drawer", "測試錢箱")) }
         }
-        Spacer(modifier = Modifier.height(12.dp))
+        Spacer(Modifier.height(20.dp))
+        Text(vm.bi("Cloud sync (multi-shop)", "雲端同步（多店）"), fontWeight = FontWeight.Bold, fontSize = 16.sp)
         Text(
             vm.bi(
-                "Cash drawer plugs into the printer RJ12 port. Cash pay kicks the drawer automatically.",
-                "錢箱接打印機 RJ12。現金付款會自動彈開錢箱。",
+                "One API key per shop. Sales upload every 5 min when online. Sync pulls portal prices.",
+                "每店一個 API Key。有網時每 5 分鐘上載銷售。同步拉取門市價。",
             ),
             color = TextMuted,
+            fontSize = 12.sp,
         )
+        Spacer(Modifier.height(8.dp))
+        Text("API base URL", color = TextMuted)
+        BasicTextField(apiBase, { apiBase = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
+        Spacer(Modifier.height(8.dp))
+        Text("Shop API key", color = TextMuted)
+        BasicTextField(apiKey, { apiKey = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
+        Spacer(Modifier.height(8.dp))
+        Text("Shop code", color = TextMuted)
+        BasicTextField(shopCode, { shopCode = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Switch(checked = periodic, onCheckedChange = { periodic = it })
+            Text(vm.bi("Periodic sales upload", "定期上載銷售"))
+        }
+        Button(
+            onClick = {
+                vm.saveSync(
+                    com.store88.pos.sync.SyncConfig(
+                        baseUrl = apiBase,
+                        apiKey = apiKey,
+                        shopCode = shopCode,
+                        periodicUploadEnabled = periodic,
+                    ),
+                )
+            },
+            colors = ButtonDefaults.buttonColors(containerColor = Teal),
+            modifier = Modifier.fillMaxWidth(),
+        ) { Text(vm.bi("Save sync", "儲存同步")) }
+        Spacer(Modifier.height(8.dp))
+        Button(
+            onClick = { vm.syncNow() },
+            enabled = !ui.syncing,
+            colors = ButtonDefaults.buttonColors(containerColor = TealDark),
+            modifier = Modifier.fillMaxWidth(),
+        ) {
+            Text(if (ui.syncing) "Syncing…" else vm.bi("Sync now", "立即同步"))
+        }
+        ui.state.lastSyncAt?.let {
+            Text("Last catalog sync: $it", color = TextMuted, fontSize = 12.sp)
+        }
     }
 }

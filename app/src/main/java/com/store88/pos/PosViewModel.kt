@@ -24,6 +24,10 @@ import com.store88.pos.hardware.PrinterConfig
 import com.store88.pos.hardware.PrinterResult
 import com.store88.pos.hardware.PrinterSettingsStore
 import com.store88.pos.hardware.ReceiptFormatter
+import com.store88.pos.sync.SyncClient
+import com.store88.pos.sync.SyncConfig
+import com.store88.pos.sync.SyncResult
+import com.store88.pos.sync.SyncSettingsStore
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.delay
@@ -64,11 +68,14 @@ data class UiState(
     val customerThankYouUntil: Long = 0L,
     val customerThankYouTotal: Double = 0.0,
     val showCustomerPreview: Boolean = false,
+    val sync: com.store88.pos.sync.SyncConfig = com.store88.pos.sync.SyncConfig(),
+    val syncing: Boolean = false,
 )
 
 class PosViewModel(app: Application) : AndroidViewModel(app) {
     private val repo = PosRepository(app)
     private val printerStore = PrinterSettingsStore(app)
+    private val syncStore = SyncSettingsStore(app)
     private val escPos = EscPosClient()
 
     private val _ui = MutableStateFlow(UiState())
@@ -78,11 +85,13 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             val loaded = repo.load()
             val printer = printerStore.load()
+            val sync = syncStore.load()
             _ui.update {
                 it.copy(
                     ready = true,
                     state = loaded,
                     printer = printer,
+                    sync = sync,
                     printOnPay = printer.printOnPayDefault,
                     online = guessOnline(),
                 )
@@ -92,6 +101,16 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
             while (true) {
                 delay(1000)
                 _ui.update { it.copy(nowMs = System.currentTimeMillis(), online = guessOnline()) }
+            }
+        }
+        // Periodic sales upload every 5 minutes when online (never blocks pay)
+        viewModelScope.launch {
+            while (true) {
+                delay(5 * 60 * 1000L)
+                val cur = _ui.value
+                if (cur.ready && cur.sync.periodicUploadEnabled && cur.online) {
+                    uploadSalesSilent()
+                }
             }
         }
     }
@@ -489,6 +508,51 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         printerStore.save(config)
         _ui.update { it.copy(printer = config) }
         flash("Printer settings saved")
+    }
+
+    fun saveSync(config: SyncConfig) {
+        syncStore.save(config)
+        _ui.update { it.copy(sync = config) }
+        flash("Sync settings saved / 已儲存同步設定")
+    }
+
+    fun uploadSalesSilent() {
+        viewModelScope.launch {
+            val cur = _ui.value
+            when (val r = SyncClient.uploadSales(cur.sync, cur.state.sales)) {
+                is SyncResult.Ok -> {
+                    if (r.message.startsWith("Uploaded")) {
+                        mutate { st ->
+                            st.copy(sales = st.sales.map { if (!it.synced) it.copy(synced = true) else it })
+                        }
+                    }
+                }
+                is SyncResult.Err -> Unit
+            }
+        }
+    }
+
+    fun syncNow() {
+        if (_ui.value.syncing) return
+        viewModelScope.launch {
+            _ui.update { it.copy(syncing = true) }
+            val cur = _ui.value
+            when (val upload = SyncClient.uploadSales(cur.sync, cur.state.sales)) {
+                is SyncResult.Ok -> {
+                    mutate { st -> st.copy(sales = st.sales.map { it.copy(synced = true) }) }
+                    val (pullResult, payload) = SyncClient.pullCatalog(_ui.value.sync)
+                    when (pullResult) {
+                        is SyncResult.Ok -> {
+                            if (payload != null) mutate { SyncClient.mergeCatalog(it, payload) }
+                            flash("${upload.message}; ${pullResult.message}")
+                        }
+                        is SyncResult.Err -> flash("Pull failed: ${pullResult.message}")
+                    }
+                }
+                is SyncResult.Err -> flash("Upload failed: ${upload.message}")
+            }
+            _ui.update { it.copy(syncing = false) }
+        }
     }
 
     fun setCountedCash(v: String) {
