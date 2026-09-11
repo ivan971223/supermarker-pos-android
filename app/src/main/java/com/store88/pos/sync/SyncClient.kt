@@ -26,7 +26,20 @@ data class SyncConfig(
     val apiKey: String = "till-key-hunghom88-dev",
     val shopCode: String = "hunghom88",
     val periodicUploadEnabled: Boolean = true,
-)
+) {
+    fun normalizedBaseUrl(): String = normalizeBaseUrl(baseUrl)
+}
+
+/** Fix common typos like http://10.0.2.2/4000 → http://10.0.2.2:4000 */
+fun normalizeBaseUrl(raw: String): String {
+    var s = raw.trim().trimEnd('/')
+    if (s.isBlank()) return "http://10.0.2.2:4000"
+    if (!s.startsWith("http://", ignoreCase = true) && !s.startsWith("https://", ignoreCase = true)) {
+        s = "http://$s"
+    }
+    s = s.replace(Regex("""^(https?://[^/:]+)/(\d+)$""", RegexOption.IGNORE_CASE), "$1:$2")
+    return s.trimEnd('/')
+}
 
 class SyncSettingsStore(context: Context) {
     private val prefs = context.getSharedPreferences("sync_settings", Context.MODE_PRIVATE)
@@ -40,7 +53,7 @@ class SyncSettingsStore(context: Context) {
 
     fun save(config: SyncConfig) {
         prefs.edit()
-            .putString("baseUrl", config.baseUrl.trim().trimEnd('/'))
+            .putString("baseUrl", normalizeBaseUrl(config.baseUrl))
             .putString("apiKey", config.apiKey.trim())
             .putString("shopCode", config.shopCode.trim())
             .putBoolean("periodicUploadEnabled", config.periodicUploadEnabled)
@@ -63,27 +76,27 @@ object SyncClient {
             val body = json.encodeToString(UploadBody(pending.map { it.toWire() }))
             val conn = open(config, "/sync/sales", "POST")
             conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-            val text = conn.inputStream.bufferedReader().readText()
-            if (conn.responseCode !in 200..299) {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull()
-                return@withContext SyncResult.Err(err ?: "HTTP ${conn.responseCode}")
+            val code = conn.responseCode
+            val text = readBody(conn)
+            if (code !in 200..299) {
+                return@withContext SyncResult.Err(httpErr(code, text, config))
             }
             val parsed = json.decodeFromString<UploadResponse>(text)
             SyncResult.Ok("Uploaded ${parsed.upserted} sales")
-        }.getOrElse { SyncResult.Err(it.message ?: "Upload failed") }
+        }.getOrElse { SyncResult.Err(networkErr(it, config)) }
     }
 
     suspend fun pullCatalog(config: SyncConfig): Pair<SyncResult, CatalogPayload?> = withContext(Dispatchers.IO) {
         runCatching {
             val conn = open(config, "/sync/catalog", "GET")
-            val text = conn.inputStream.bufferedReader().readText()
-            if (conn.responseCode !in 200..299) {
-                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull()
-                return@withContext SyncResult.Err(err ?: "HTTP ${conn.responseCode}") to null
+            val code = conn.responseCode
+            val text = readBody(conn)
+            if (code !in 200..299) {
+                return@withContext SyncResult.Err(httpErr(code, text, config)) to null
             }
             val payload = json.decodeFromString<CatalogPayload>(text)
             SyncResult.Ok("Catalog pulled (${payload.products.size} products)") to payload
-        }.getOrElse { SyncResult.Err(it.message ?: "Pull failed") to null }
+        }.getOrElse { SyncResult.Err(networkErr(it, config)) to null }
     }
 
 
@@ -204,7 +217,9 @@ object SyncClient {
         val lots = portalLots + localOnlyLots
 
         return state.copy(
-            shopName = payload.shopCode?.let { state.shopName } ?: state.shopName,
+            shopName = payload.shopName?.takeIf { it.isNotBlank() } ?: state.shopName,
+            shopNameZh = payload.shopNameZh?.takeIf { it.isNotBlank() } ?: state.shopNameZh,
+            shopCode = payload.shopCode?.takeIf { it.isNotBlank() } ?: state.shopCode,
             categories = categories,
             products = products.ifEmpty { state.products },
             promos = promos,
@@ -258,7 +273,7 @@ object SyncClient {
     )
 
     private fun open(config: SyncConfig, path: String, method: String): HttpURLConnection {
-        val url = URL(config.baseUrl.trimEnd('/') + path)
+        val url = URL(config.normalizedBaseUrl() + path)
         return (url.openConnection() as HttpURLConnection).apply {
             requestMethod = method
             setRequestProperty("Content-Type", "application/json")
@@ -268,6 +283,25 @@ object SyncClient {
             doInput = true
             if (method == "POST") doOutput = true
         }
+    }
+
+    private fun readBody(conn: HttpURLConnection): String {
+        val stream = try {
+            if (conn.responseCode in 200..299) conn.inputStream else conn.errorStream
+        } catch (_: Exception) {
+            conn.errorStream ?: conn.inputStream
+        }
+        return stream?.bufferedReader()?.readText().orEmpty()
+    }
+
+    private fun httpErr(code: Int, body: String, config: SyncConfig): String {
+        val hint = body.take(120).ifBlank { "HTTP $code" }
+        return "$hint (url=${config.normalizedBaseUrl()})"
+    }
+
+    private fun networkErr(t: Throwable, config: SyncConfig): String {
+        val msg = t.message ?: t.javaClass.simpleName
+        return "$msg — check API is running and URL is http://10.0.2.2:4000 (colon before port), not …/4000. Current: ${config.normalizedBaseUrl()}"
     }
 
     private fun Sale.toWire() = WireSale(
@@ -330,6 +364,8 @@ private data class WireLine(
 data class CatalogPayload(
     val shopId: String? = null,
     val shopCode: String? = null,
+    val shopName: String? = null,
+    val shopNameZh: String? = null,
     val pulledAt: String? = null,
     val categories: List<WireCategory> = emptyList(),
     val products: List<WireProduct> = emptyList(),

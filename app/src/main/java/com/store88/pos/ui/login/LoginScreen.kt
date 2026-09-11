@@ -59,11 +59,30 @@ fun LoginScreen(ui: UiState, vm: PosViewModel) {
         ) {
             Column(Modifier.fillMaxWidth(), horizontalAlignment = Alignment.CenterHorizontally) {
                 Text("☀", fontSize = 40.sp, color = Sun)
+                val shopEn = ui.state.shopName.ifBlank { "88 Store" }
+                val shopZh = ui.state.shopNameZh.ifBlank { "88超市" }
                 if (ui.state.uiLanguage != "zh") {
-                    Text("88 Store", fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = TealDark)
+                    Text(shopEn, fontSize = 28.sp, fontWeight = FontWeight.ExtraBold, color = TealDark)
                 }
                 if (ui.state.uiLanguage != "en") {
-                    Text("88超市", fontSize = if (ui.state.uiLanguage == "zh") 24.sp else 16.sp, fontWeight = FontWeight.Bold, color = if (ui.state.uiLanguage == "zh") TealDark else TextMuted)
+                    Text(
+                        shopZh,
+                        fontSize = if (ui.state.uiLanguage == "zh") 24.sp else 16.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (ui.state.uiLanguage == "zh") TealDark else TextMuted,
+                    )
+                }
+                val branch = listOfNotNull(
+                    ui.state.shopCode.takeIf { it.isNotBlank() } ?: ui.sync.shopCode.takeIf { it.isNotBlank() },
+                ).firstOrNull()
+                if (branch != null) {
+                    Text(
+                        vm.bi("Branch / 分店：$branch", "分店：$branch"),
+                        color = Teal,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
                 }
                 Text(vm.bi("Point of Sale", "收銀系統"), color = TextMuted, fontSize = 15.sp)
             }

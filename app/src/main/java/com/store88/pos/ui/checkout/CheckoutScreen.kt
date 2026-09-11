@@ -84,7 +84,13 @@ fun CheckoutScreen(ui: UiState, vm: PosViewModel) {
     val page = ui.productPage.coerceIn(0, pages - 1)
     val pageItems = filtered.drop(page * pageSize).take(pageSize)
     val cashierZh = (state.cashiers.ifEmpty { com.store88.pos.domain.PosConstants.CASHIERS }).find { it.name == state.session?.cashier }?.nameZh
-    val brand = vm.bi(state.shopName.ifBlank { "88 Store" }, state.shopNameZh.ifBlank { "88超市" })
+    val brand = run {
+        val en = state.shopName.ifBlank { "88 Store" }
+        val zh = state.shopNameZh.ifBlank { "88超市" }
+        val code = state.shopCode.ifBlank { ui.sync.shopCode }
+        val base = vm.bi(en, zh)
+        if (code.isNotBlank()) "$base · $code" else base
+    }
     val cartTitle = when (state.uiLanguage) {
         "en" -> "Cart ($itemCount)"
         "zh" -> "購物車 (${itemCount}件)"

@@ -632,29 +632,43 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             _ui.update { it.copy(syncing = true) }
             val cur = _ui.value
+            val parts = mutableListOf<String>()
             when (val upload = SyncClient.uploadSales(cur.sync, cur.state.sales)) {
                 is SyncResult.Ok -> {
-                    mutate { st -> st.copy(sales = st.sales.map { it.copy(synced = true) }) }
-                    val pending = _ui.value.state.pendingChangeRequests
-                    val changeMsg = when (val cr = SyncClient.pushChangeRequests(_ui.value.sync, pending)) {
-                        is SyncResult.Ok -> {
-                            if (pending.isNotEmpty()) {
-                                mutate { it.copy(pendingChangeRequests = emptyList()) }
-                            }
-                            cr.message
-                        }
-                        is SyncResult.Err -> "Requests failed: ${cr.message}"
+                    if (upload.message.startsWith("Uploaded")) {
+                        mutate { st -> st.copy(sales = st.sales.map { it.copy(synced = true) }) }
                     }
-                    val (pullResult, payload) = SyncClient.pullCatalog(_ui.value.sync)
-                    when (pullResult) {
-                        is SyncResult.Ok -> {
-                            if (payload != null) mutate { SyncClient.mergeCatalog(it, payload) }
-                            flash("${upload.message}; $changeMsg; ${pullResult.message}")
-                        }
-                        is SyncResult.Err -> flash("Pull failed: ${pullResult.message}")
-                    }
+                    parts += upload.message
                 }
-                is SyncResult.Err -> flash("Upload failed: ${upload.message}")
+                is SyncResult.Err -> parts += "Upload failed: ${upload.message}"
+            }
+            val pending = _ui.value.state.pendingChangeRequests
+            when (val cr = SyncClient.pushChangeRequests(_ui.value.sync, pending)) {
+                is SyncResult.Ok -> {
+                    if (pending.isNotEmpty()) {
+                        mutate { it.copy(pendingChangeRequests = emptyList()) }
+                    }
+                    parts += cr.message
+                }
+                is SyncResult.Err -> parts += "Requests failed: ${cr.message}"
+            }
+            // Always pull catalog (roles / shop / prices) even if upload failed
+            val (pullResult, payload) = SyncClient.pullCatalog(_ui.value.sync)
+            when (pullResult) {
+                is SyncResult.Ok -> {
+                    if (payload != null) {
+                        mutate { SyncClient.mergeCatalog(it, payload) }
+                        // Keep sync.shopCode aligned with portal shop
+                        payload.shopCode?.takeIf { it.isNotBlank() }?.let { code ->
+                            val next = _ui.value.sync.copy(shopCode = code)
+                            syncStore.save(next)
+                            _ui.update { it.copy(sync = next) }
+                        }
+                    }
+                    parts += pullResult.message
+                    flash(parts.joinToString("; "))
+                }
+                is SyncResult.Err -> flash(parts.joinToString("; ") + "; Pull failed: ${pullResult.message}")
             }
             _ui.update { it.copy(syncing = false) }
         }

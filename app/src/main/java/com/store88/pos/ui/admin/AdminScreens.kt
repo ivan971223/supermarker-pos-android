@@ -1233,6 +1233,11 @@ fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
         )
         Spacer(Modifier.height(8.dp))
         Text("API base URL", color = TextMuted)
+        Text(
+            "Emulator: http://10.0.2.2:4000  (use : not / before port)",
+            color = TextMuted,
+            fontSize = 11.sp,
+        )
         BasicTextField(apiBase, { apiBase = it }, Modifier.fillMaxWidth().background(Color.White).padding(10.dp))
         Spacer(Modifier.height(8.dp))
         Text("Shop API key", color = TextMuted)

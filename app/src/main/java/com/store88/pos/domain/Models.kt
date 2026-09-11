@@ -207,6 +207,8 @@ data class AppState(
     val version: Int = 9,
     val shopName: String = "88 Store",
     val shopNameZh: String = "88超市",
+    /** Bound shop from sync settings / last catalog pull (e.g. hunghom88). */
+    val shopCode: String = "",
     val uiLanguage: String = "both",
     val categories: List<Category> = emptyList(),
     val favouriteIds: List<String> = emptyList(),
@@ -288,7 +290,7 @@ object PosConstants {
     )
 
     val CASHIERS = listOf(
-        Cashier("amy", "Chan Tai Man", "陳大文", "1234", role = "CASHIER"),
+        Cashier("amy", "Chan Tai Man", "陳大文", "1234", role = "ADMIN"),
         Cashier("ken", "Ken Wong", "黃健", "5678", role = "ADMIN"),
     )
 
