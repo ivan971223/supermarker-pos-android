@@ -19,6 +19,7 @@ import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +41,9 @@ import java.time.format.DateTimeFormatter
 
 @Composable
 fun DayCloseScreen(ui: UiState, vm: PosViewModel) {
+    LaunchedEffect(Unit) {
+        if (ui.cashLeftOvernight.isEmpty()) vm.fillCashLeftWithOpening()
+    }
     val session = ui.state.session
     val sessionSales = Pricing.sessionSales(ui.state)
     val active = sessionSales.filter { it.isActive }
@@ -50,6 +54,9 @@ fun DayCloseScreen(ui: UiState, vm: PosViewModel) {
     val opening = session?.openingFloat ?: 0.0
     val expected = opening + cashSales
     val counted = ui.countedCash.toDoubleOrNull() ?: 0.0
+    val left = ui.cashLeftOvernight.toDoubleOrNull()
+        ?: opening.coerceAtMost(if (counted > 0) counted else opening)
+    val bank = (counted - left).coerceAtLeast(0.0)
     val diff = counted - expected
     val breakdown = Pricing.paymentBreakdown(ui.state)
     val totalAll = breakdown.values.sum()
@@ -94,7 +101,7 @@ fun DayCloseScreen(ui: UiState, vm: PosViewModel) {
                 Text("1. Expected Cash in Drawer / 應有現金", color = TextMuted)
                 Text(Pricing.money(expected), fontSize = 32.sp, fontWeight = FontWeight.Black, color = Teal)
                 Text(
-                    "Float ${Pricing.money(opening)} + cash sales ${Pricing.money(cashSales)}",
+                    "Float ${Pricing.money(opening)}（琴日淨低）+ cash sales ${Pricing.money(cashSales)}",
                     color = TextMuted,
                     fontSize = 12.sp,
                 )
@@ -141,6 +148,63 @@ fun DayCloseScreen(ui: UiState, vm: PosViewModel) {
                 Spacer(Modifier.height(16.dp))
                 Text("3. Difference / 差額 ${if (diff >= 0) "(Over / 溢額)" else "(Short / 短欠)"}", color = TextMuted)
                 Text(Pricing.money(diff), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = if (diff >= 0) Teal else Color.Red)
+                Spacer(Modifier.height(20.dp))
+                Row(
+                    Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("4. Cash left overnight / 現金淨低", color = TextMuted)
+                    Box(
+                        Modifier
+                            .clip(RoundedCornerShape(8.dp))
+                            .border(1.dp, Teal, RoundedCornerShape(8.dp))
+                            .clickable { vm.fillCashLeftWithOpening() }
+                            .padding(horizontal = 10.dp, vertical = 6.dp),
+                    ) {
+                        Text(vm.bi("Use opening", "用開市浮存"), color = Teal, fontSize = 12.sp, fontWeight = FontWeight.SemiBold)
+                    }
+                }
+                Text(
+                    vm.bi(
+                        "Left in drawer for tomorrow (rest → bank)",
+                        "留櫃作聽日開市；其餘入銀行",
+                    ),
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                )
+                Spacer(Modifier.height(8.dp))
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .height(52.dp)
+                        .clip(RoundedCornerShape(10.dp))
+                        .border(1.dp, Border, RoundedCornerShape(10.dp))
+                        .background(Color.White)
+                        .padding(horizontal = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text("HK$", fontWeight = FontWeight.Bold, color = Teal)
+                    Spacer(Modifier.width(8.dp))
+                    BasicTextField(
+                        value = ui.cashLeftOvernight,
+                        onValueChange = vm::setCashLeftOvernight,
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                        decorationBox = { inner ->
+                            if (ui.cashLeftOvernight.isEmpty()) Text("%.2f".format(opening), color = TextMuted)
+                            inner()
+                        },
+                    )
+                }
+                Spacer(Modifier.height(16.dp))
+                Text("5. Bank deposit / 入銀行", color = TextMuted)
+                Text(Pricing.money(bank), fontSize = 28.sp, fontWeight = FontWeight.Bold, color = Teal)
+                Text(
+                    "Counted ${Pricing.money(counted)} − left ${Pricing.money(left)}",
+                    color = TextMuted,
+                    fontSize = 12.sp,
+                )
             }
             Column(
                 Modifier

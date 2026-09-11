@@ -277,7 +277,6 @@ object Pricing {
             cart = emptyList(),
             cartDiscountPercent = 0.0,
             offlineQueue = if (online) state.offlineQueue else listOf(sale) + state.offlineQueue,
-            lastSyncAt = if (online) nowISO() else state.lastSyncAt,
         )
         if (online) {
             next = next.copy(

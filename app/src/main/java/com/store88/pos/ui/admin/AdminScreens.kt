@@ -66,18 +66,20 @@ fun AdminShell(
     vm: PosViewModel,
     content: @Composable () -> Unit,
 ) {
-    val nav = listOf(
-        Triple(Screen.Products, "🏷", "Products / 產品"),
-        Triple(Screen.Categories, "📂", "Categories / 類別管理"),
-        Triple(Screen.Promotions, "%", "Promotions / 優惠"),
-        Triple(Screen.Transactions, "🧾", "Transaction Records / 交易紀錄"),
-        Triple(Screen.Inventory, "📦", "Inventory / 庫存"),
-        Triple(Screen.Receive, "🛒", "Receive Goods / 收貨"),
-        Triple(Screen.Reports, "📈", "Reports / 報表"),
-        Triple(Screen.Expiry, "⏰", "Near Expiry / 到期"),
-        Triple(Screen.ReceiptDesign, "🖨", "Receipt Design / 單據範本"),
-        Triple(Screen.PrinterSettings, "🔌", "Printer / 打印機"),
-    )
+    val nav = buildList {
+        add(Triple(Screen.Products, "🏷", "Products / 產品"))
+        add(Triple(Screen.Categories, "📂", "Categories / 類別管理"))
+        add(Triple(Screen.Promotions, "%", "Promotions / 優惠"))
+        add(Triple(Screen.Transactions, "🧾", "Transaction Records / 交易紀錄"))
+        add(Triple(Screen.Inventory, "📦", "Inventory / 庫存"))
+        add(Triple(Screen.Receive, "🛒", "Receive Goods / 收貨"))
+        add(Triple(Screen.Reports, "📈", "Reports / 報表"))
+        add(Triple(Screen.Expiry, "⏰", "Near Expiry / 到期"))
+        add(Triple(Screen.ReceiptDesign, "🖨", "Receipt Design / 單據範本"))
+        if (vm.isTillAdmin()) {
+            add(Triple(Screen.PrinterSettings, "🔌", "Printer / Sync / 打印機／同步"))
+        }
+    }
     Row(modifier = Modifier.fillMaxSize().background(Color(0xFFF8FAFC))) {
         Column(
             Modifier
@@ -124,6 +126,12 @@ fun AdminShell(
                 vm.bi("Day Close", "日結"),
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier.fillMaxWidth().clickable { vm.setScreen(Screen.DayClose) }.padding(12.dp),
+            )
+            Text(
+                vm.bi("Logout", "登出"),
+                fontWeight = FontWeight.Bold,
+                color = Color(0xFFB91C1C),
+                modifier = Modifier.fillMaxWidth().clickable { vm.logoutCashier() }.padding(12.dp),
             )
         }
         Column(Modifier.weight(1f)) {
@@ -1162,6 +1170,12 @@ private fun FunField(label: String, value: String, onChange: (String) -> Unit) {
 
 @Composable
 fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
+    if (!vm.isTillAdmin()) {
+        LaunchedEffect(Unit) {
+            vm.setScreen(Screen.Checkout)
+        }
+        return
+    }
     var host by remember(ui.printer) { mutableStateOf(ui.printer.host) }
     var port by remember(ui.printer) { mutableStateOf(ui.printer.port.toString()) }
     var dry by remember(ui.printer) { mutableStateOf(ui.printer.dryRun) }
@@ -1253,8 +1267,15 @@ fun PrinterSettingsAdmin(ui: UiState, vm: PosViewModel) {
         ) {
             Text(if (ui.syncing) "Syncing…" else vm.bi("Sync now", "立即同步"))
         }
-        ui.state.lastSyncAt?.let {
-            Text("Last catalog sync: $it", color = TextMuted, fontSize = 12.sp)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            vm.bi("Last sync", "上次同步") + ": " + vm.lastSyncLabel(),
+            color = TextMuted,
+            fontSize = 13.sp,
+            fontWeight = FontWeight.SemiBold,
+        )
+        if (ui.state.lastSyncAt != null) {
+            Text(vm.lastSyncAbsolute(), color = TextMuted, fontSize = 11.sp)
         }
     }
 }

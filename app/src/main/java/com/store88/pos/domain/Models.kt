@@ -77,7 +77,7 @@ data class Category(
 @Serializable
 data class ReceiptConfig(
     val shopName: String = "88 Store / 88超市",
-    val address: String = "G/F, 88 Nathan Road, Tsim Sha Tsui, HK / 尖沙咀彌敦道88號地下",
+    val address: String = "G/F, 88 Ma Tau Wai Road, Hung Hom, HK / 紅磡馬頭圍道88號地下",
     val tel: String = "+852 2345 6789",
     val brNo: String = "BR-68492011",
     val headerMsg: String = "Welcome to 88 Store! / 歡迎光臨88超市！",
@@ -189,16 +189,22 @@ data class HeldCart(
 data class Session(
     val id: String,
     val cashier: String,
+    val cashierId: String = "",
     val openedAt: String,
     val closedAt: String? = null,
+    /** Opening drawer cash = yesterday's overnight float (琴日淨低). */
     val openingFloat: Double = 500.0,
     val expectedCash: Double? = null,
     val countedCash: Double? = null,
+    /** Cash left in drawer overnight for tomorrow (淨低). */
+    val cashLeftOvernight: Double? = null,
+    /** Counted − cash left → taken to bank (入銀行). */
+    val bankDeposit: Double? = null,
 )
 
 @Serializable
 data class AppState(
-    val version: Int = 7,
+    val version: Int = 9,
     val shopName: String = "88 Store",
     val shopNameZh: String = "88超市",
     val uiLanguage: String = "both",
@@ -215,13 +221,33 @@ data class AppState(
     val offlineQueue: List<Sale> = emptyList(),
     val lastSyncAt: String? = null,
     val receiptConfig: ReceiptConfig = ReceiptConfig(),
+    /** From portal Sync; empty → fall back to PosConstants.CASHIERS */
+    val cashiers: List<Cashier> = emptyList(),
+    /** Local edits waiting for portal Accept / Reject */
+    val pendingChangeRequests: List<PendingChangeRequest> = emptyList(),
+    /**
+     * Cash left in drawer after last day close (淨低) — becomes next session opening float.
+     * Default HK$500 for first-ever open.
+     */
+    val cashFloatCarry: Double = 500.0,
 )
 
+@Serializable
+data class PendingChangeRequest(
+    val localId: String,
+    val type: String,
+    val summary: String,
+    val payloadJson: String,
+)
+
+@Serializable
 data class Cashier(
     val id: String,
     val name: String,
     val nameZh: String,
     val pin: String,
+    /** ADMIN can open Printer/Sync; CASHIER cannot. */
+    val role: String = "CASHIER",
 )
 
 data class PaymentOption(
@@ -262,8 +288,8 @@ object PosConstants {
     )
 
     val CASHIERS = listOf(
-        Cashier("amy", "Chan Tai Man", "陳大文", "1234"),
-        Cashier("ken", "Ken Wong", "黃健", "5678"),
+        Cashier("amy", "Chan Tai Man", "陳大文", "1234", role = "CASHIER"),
+        Cashier("ken", "Ken Wong", "黃健", "5678", role = "ADMIN"),
     )
 
     /** Manager PIN for void / refund (HK small shop). Change before production. */

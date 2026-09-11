@@ -70,7 +70,8 @@ object SeedData {
     }
 
     fun createSeedState(): AppState = AppState(
-        version = 7,
+        version = 9,
+        cashiers = PosConstants.CASHIERS,
         shopName = "88 Store",
         shopNameZh = "88超市",
         uiLanguage = "both",

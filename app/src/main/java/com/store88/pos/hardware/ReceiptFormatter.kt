@@ -139,6 +139,16 @@ object ReceiptFormatter {
         text(padRow("Expected", "%.2f".format(expected), cols))
         text(padRow("Counted", "%.2f".format(counted), cols))
         text(padRow("Diff", "%.2f".format(diff), cols))
+        val left = session.cashLeftOvernight
+        val bank = session.bankDeposit
+        if (left != null) {
+            text(padRow("Left overnight", "%.2f".format(left), cols))
+            text(padRow("淨低留櫃", "%.2f".format(left), cols))
+        }
+        if (bank != null) {
+            text(padRow("Bank deposit", "%.2f".format(bank), cols))
+            text(padRow("入銀行", "%.2f".format(bank), cols))
+        }
         line()
         center("*** END OF DAY ***")
         raw(0x0A, 0x0A, 0x0A)

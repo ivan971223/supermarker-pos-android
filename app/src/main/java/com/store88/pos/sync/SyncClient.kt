@@ -6,6 +6,8 @@ import com.store88.pos.domain.Cashier
 import com.store88.pos.domain.Category
 import com.store88.pos.domain.PosConstants
 import com.store88.pos.domain.Product
+import com.store88.pos.domain.Lot
+import com.store88.pos.domain.PendingChangeRequest
 import com.store88.pos.domain.Promo
 import com.store88.pos.domain.ReceiptConfig
 import com.store88.pos.domain.Sale
@@ -15,13 +17,14 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
 import java.net.HttpURLConnection
 import java.net.URL
 
 data class SyncConfig(
     val baseUrl: String = "http://10.0.2.2:4000",
-    val apiKey: String = "till-key-shop-a-dev",
-    val shopCode: String = "shop-a",
+    val apiKey: String = "till-key-hunghom88-dev",
+    val shopCode: String = "hunghom88",
     val periodicUploadEnabled: Boolean = true,
 )
 
@@ -30,8 +33,8 @@ class SyncSettingsStore(context: Context) {
 
     fun load(): SyncConfig = SyncConfig(
         baseUrl = prefs.getString("baseUrl", "http://10.0.2.2:4000") ?: "http://10.0.2.2:4000",
-        apiKey = prefs.getString("apiKey", "till-key-shop-a-dev") ?: "till-key-shop-a-dev",
-        shopCode = prefs.getString("shopCode", "shop-a") ?: "shop-a",
+        apiKey = prefs.getString("apiKey", "till-key-hunghom88-dev") ?: "till-key-hunghom88-dev",
+        shopCode = prefs.getString("shopCode", "hunghom88") ?: "hunghom88",
         periodicUploadEnabled = prefs.getBoolean("periodicUploadEnabled", true),
     )
 
@@ -83,6 +86,34 @@ object SyncClient {
         }.getOrElse { SyncResult.Err(it.message ?: "Pull failed") to null }
     }
 
+
+    suspend fun pushChangeRequests(config: SyncConfig, requests: List<PendingChangeRequest>): SyncResult = withContext(Dispatchers.IO) {
+        if (requests.isEmpty()) return@withContext SyncResult.Ok("No change requests")
+        runCatching {
+            val body = json.encodeToString(
+                ChangeRequestUploadBody(
+                    requests.map {
+                        ChangeRequestWire(
+                            type = it.type,
+                            summary = it.summary,
+                            payload = json.parseToJsonElement(it.payloadJson),
+                            tillLabel = "android-till",
+                        )
+                    },
+                ),
+            )
+            val conn = open(config, "/sync/change-requests", "POST")
+            conn.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
+            val text = conn.inputStream.bufferedReader().readText()
+            if (conn.responseCode !in 200..299) {
+                val err = runCatching { conn.errorStream?.bufferedReader()?.readText() }.getOrNull()
+                return@withContext SyncResult.Err(err ?: "HTTP ${conn.responseCode}")
+            }
+            val parsed = json.decodeFromString<ChangeRequestUploadResponse>(text)
+            SyncResult.Ok("Submitted ${parsed.created} change request(s)")
+        }.getOrElse { SyncResult.Err(it.message ?: "Change request upload failed") }
+    }
+
     fun mergeCatalog(state: AppState, payload: CatalogPayload): AppState {
         val categories = payload.categories.map {
             Category(it.id, it.en, it.zh, it.icon, it.system)
@@ -93,7 +124,7 @@ object SyncClient {
                 nameEn = it.nameEn,
                 nameZh = it.nameZh,
                 barcode = it.barcode,
-                category = it.categoryId,
+                category = it.categoryId ?: "",
                 cost = it.cost,
                 price = it.price,
                 stock = it.stock,
@@ -148,6 +179,30 @@ object SyncClient {
             .distinct()
             .ifEmpty { products.filter { p -> payload.products.find { it.id == p.id }?.favourite == true }.map { it.id } }
 
+        val cashiers = payload.cashiers.map {
+            Cashier(
+                it.id,
+                it.name,
+                it.nameZh,
+                it.pin,
+                role = if (it.role.equals("ADMIN", ignoreCase = true)) "ADMIN" else "CASHIER",
+            )
+        }.ifEmpty { state.cashiers.ifEmpty { PosConstants.CASHIERS } }
+
+        // Portal lots win; keep till-only lots (local ids) until portal accept creates them.
+        val portalLots = payload.lots.map {
+            Lot(
+                id = it.id,
+                productId = it.productId,
+                lotNumber = it.lotNumber,
+                qty = it.qty,
+                expiryDate = it.expiryDate,
+            )
+        }
+        val portalIds = portalLots.map { it.id }.toSet()
+        val localOnlyLots = state.lots.filter { it.id.startsWith("lot-") && it.id !in portalIds }
+        val lots = portalLots + localOnlyLots
+
         return state.copy(
             shopName = payload.shopCode?.let { state.shopName } ?: state.shopName,
             categories = categories,
@@ -155,9 +210,52 @@ object SyncClient {
             promos = promos,
             favouriteIds = favs.ifEmpty { state.favouriteIds },
             receiptConfig = receipt,
-            lastSyncAt = payload.pulledAt,
+            cashiers = cashiers,
+            lots = lots,
+            lastSyncAt = payload.pulledAt?.takeIf { it.isNotBlank() } ?: java.time.OffsetDateTime.now().toString(),
         )
     }
+
+
+    fun receiptPayloadJson(cfg: ReceiptConfig): String = json.encodeToString(
+        WireReceipt(
+            shopName = cfg.shopName,
+            address = cfg.address,
+            tel = cfg.tel,
+            brNo = cfg.brNo,
+            headerMsg = cfg.headerMsg,
+            footerMsg = cfg.footerMsg,
+            paperWidth = cfg.paperWidth,
+            showLogo = cfg.showLogo,
+            showAddress = cfg.showAddress,
+            showTel = cfg.showTel,
+            showBr = cfg.showBr,
+            showHeaderMsg = cfg.showHeaderMsg,
+            showFooterMsg = cfg.showFooterMsg,
+            showReceiptNo = cfg.showReceiptNo,
+            showDateTime = cfg.showDateTime,
+            showCashier = cfg.showCashier,
+            showBarcode = cfg.showBarcode,
+        ),
+    )
+
+    fun productPayloadJson(p: Product, favourite: Boolean = false): String = json.encodeToString(
+        WireProduct(
+            id = p.id,
+            nameEn = p.nameEn,
+            nameZh = p.nameZh,
+            barcode = p.barcode,
+            categoryId = p.category.ifBlank { null },
+            cost = p.cost,
+            price = p.price,
+            stock = p.stock,
+            reorderMin = p.reorderMin,
+            trackExpiry = p.trackExpiry,
+            emoji = p.emoji,
+            active = p.active,
+            favourite = favourite,
+        ),
+    )
 
     private fun open(config: SyncConfig, path: String, method: String): HttpURLConnection {
         val url = URL(config.baseUrl.trimEnd('/') + path)
@@ -238,6 +336,7 @@ data class CatalogPayload(
     val promos: List<WirePromo> = emptyList(),
     val cashiers: List<WireCashier> = emptyList(),
     val receipt: WireReceipt? = null,
+    val lots: List<WireLot> = emptyList(),
 )
 
 @Serializable
@@ -255,7 +354,7 @@ data class WireProduct(
     val nameEn: String,
     val nameZh: String,
     val barcode: String,
-    val categoryId: String,
+    val categoryId: String? = null,
     val cost: Double,
     val price: Double,
     val stock: Int,
@@ -284,7 +383,22 @@ data class WirePromo(
 )
 
 @Serializable
-data class WireCashier(val id: String, val name: String, val nameZh: String, val pin: String)
+data class WireCashier(
+    val id: String,
+    val name: String,
+    val nameZh: String,
+    val pin: String,
+    val role: String = "CASHIER",
+)
+
+@Serializable
+data class WireLot(
+    val id: String,
+    val productId: String,
+    val lotNumber: String,
+    val qty: Int,
+    val expiryDate: String,
+)
 
 @Serializable
 data class WireReceipt(
@@ -305,4 +419,22 @@ data class WireReceipt(
     val showDateTime: Boolean = true,
     val showCashier: Boolean = true,
     val showBarcode: Boolean = true,
+)
+
+@Serializable
+private data class ChangeRequestUploadBody(
+    val requests: List<ChangeRequestWire>,
+)
+
+@Serializable
+private data class ChangeRequestWire(
+    val type: String,
+    val summary: String,
+    val payload: JsonElement,
+    val tillLabel: String? = null,
+)
+
+@Serializable
+private data class ChangeRequestUploadResponse(
+    val created: Int = 0,
 )

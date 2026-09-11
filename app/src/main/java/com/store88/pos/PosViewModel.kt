@@ -13,6 +13,7 @@ import com.store88.pos.domain.Category
 import com.store88.pos.domain.Lot
 import com.store88.pos.domain.PaymentMethod
 import com.store88.pos.domain.PosConstants
+import com.store88.pos.domain.PendingChangeRequest
 import com.store88.pos.domain.Product
 import com.store88.pos.domain.Promo
 import com.store88.pos.domain.ReceiptConfig
@@ -54,6 +55,8 @@ data class UiState(
     val online: Boolean = true,
     val printer: PrinterConfig = PrinterConfig(),
     val countedCash: String = "",
+    /** Day close: cash left overnight (淨低) for tomorrow opening. */
+    val cashLeftOvernight: String = "",
     val adminSearch: String = "",
     val showMore: Boolean = false,
     val showScan: Boolean = false,
@@ -135,7 +138,23 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setScreen(screen: Screen) {
+        if (screen == Screen.PrinterSettings && !isTillAdmin()) {
+            flash("Admin only — Printer/Sync / 僅管理員可開打印機／同步設定")
+            return
+        }
         _ui.update { it.copy(screen = screen, flash = null, loginError = null) }
+    }
+
+    /** Till cashier role ADMIN (from portal Cashiers). */
+    fun isTillAdmin(): Boolean {
+        val st = _ui.value.state
+        val sid = st.session?.cashierId?.takeIf { it.isNotBlank() }
+        val cashiers = st.cashiers.ifEmpty { PosConstants.CASHIERS }
+        val me = when {
+            sid != null -> cashiers.find { it.id == sid }
+            else -> cashiers.find { it.name == st.session?.cashier }
+        }
+        return me?.role.equals("ADMIN", ignoreCase = true)
     }
 
     fun setLanguage(lang: UiLanguage) {
@@ -165,21 +184,42 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
     fun tryLogin(pinValue: String? = null) {
         val cur = _ui.value
         val pin = pinValue ?: cur.pin
-        val cashier = PosConstants.CASHIERS.find { it.id == cur.selectedCashierId }
+        val cashiers = cur.state.cashiers.ifEmpty { PosConstants.CASHIERS }
+        val cashier = cashiers.find { it.id == cur.selectedCashierId }
         if (cashier == null || cashier.pin != pin) {
             _ui.update { it.copy(pin = "", loginError = "Wrong PIN / 密碼錯誤") }
             flash("Wrong PIN / 密碼錯誤")
             return
         }
-        val session = Session(
-            id = "sess-${System.currentTimeMillis()}",
-            cashier = cashier.name,
-            openedAt = Pricing.nowISO(),
-            openingFloat = 500.0,
-        )
+        val open = cur.state.session?.takeIf { it.closedAt == null }
+        val session = if (open != null) {
+            open.copy(cashier = cashier.name, cashierId = cashier.id)
+        } else {
+            Session(
+                id = "sess-${System.currentTimeMillis()}",
+                cashier = cashier.name,
+                cashierId = cashier.id,
+                openedAt = Pricing.nowISO(),
+                openingFloat = cur.state.cashFloatCarry,
+            )
+        }
         mutate { it.copy(session = session, cart = emptyList(), cartDiscountPercent = 0.0) }
         _ui.update { it.copy(screen = Screen.Checkout, pin = "", loginError = null, showMore = false) }
         flash("Welcome ${cashier.name}")
+    }
+
+    /** Switch cashier without day close — keeps till session open. */
+    fun logoutCashier() {
+        mutate { it.copy(cart = emptyList(), cartDiscountPercent = 0.0) }
+        _ui.update {
+            it.copy(
+                screen = Screen.Login,
+                pin = "",
+                loginError = null,
+                showMore = false,
+            )
+        }
+        flash("Logged out / 已登出 — switch account")
     }
 
     fun resetDemo() {
@@ -322,6 +362,53 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         val mm = ((s % 3600) / 60).toString().padStart(2, '0')
         val ss = (s % 60).toString().padStart(2, '0')
         return "$hh:$mm:$ss"
+    }
+
+    /** Relative last catalog Sync time, e.g. "5 mins ago" / "5分鐘前". */
+    fun lastSyncLabel(): String {
+        val raw = _ui.value.state.lastSyncAt ?: return bi("Never synced", "未同步")
+        return formatSyncRelative(raw)
+    }
+
+    fun lastSyncAbsolute(): String {
+        val raw = _ui.value.state.lastSyncAt ?: return "—"
+        return formatSyncTime(raw)
+    }
+
+    fun formatSyncTime(raw: String): String {
+        return runCatching {
+            val odt = java.time.OffsetDateTime.parse(raw)
+            val local = odt.atZoneSameInstant(java.time.ZoneId.systemDefault())
+            local.format(java.time.format.DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+        }.getOrElse {
+            raw.take(16).replace('T', ' ')
+        }
+    }
+
+    fun formatSyncRelative(raw: String): String {
+        val thenMs = runCatching {
+            java.time.OffsetDateTime.parse(raw).toInstant().toEpochMilli()
+        }.getOrElse {
+            runCatching { java.time.Instant.parse(raw).toEpochMilli() }.getOrElse { return formatSyncTime(raw) }
+        }
+        val secs = ((_ui.value.nowMs - thenMs) / 1000).coerceAtLeast(0)
+        return when {
+            secs < 45 -> bi("just now", "剛剛")
+            secs < 90 -> bi("1 min ago", "1分鐘前")
+            secs < 3600 -> {
+                val m = (secs / 60).toInt()
+                bi("$m mins ago", "${m}分鐘前")
+            }
+            secs < 3600 * 36 -> {
+                val h = (secs / 3600).toInt()
+                if (h == 1) bi("1 hour ago", "1小時前") else bi("$h hours ago", "${h}小時前")
+            }
+            secs < 86400L * 14 -> {
+                val d = (secs / 86400).toInt()
+                if (d == 1) bi("1 day ago", "1天前") else bi("$d days ago", "${d}天前")
+            }
+            else -> formatSyncTime(raw)
+        }
     }
 
     fun addProduct(productId: String) {
@@ -505,12 +592,20 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun savePrinter(config: PrinterConfig) {
+        if (!isTillAdmin()) {
+            flash("Admin only — Printer/Sync / 僅管理員")
+            return
+        }
         printerStore.save(config)
         _ui.update { it.copy(printer = config) }
         flash("Printer settings saved")
     }
 
     fun saveSync(config: SyncConfig) {
+        if (!isTillAdmin()) {
+            flash("Admin only — Printer/Sync / 僅管理員")
+            return
+        }
         syncStore.save(config)
         _ui.update { it.copy(sync = config) }
         flash("Sync settings saved / 已儲存同步設定")
@@ -540,11 +635,21 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
             when (val upload = SyncClient.uploadSales(cur.sync, cur.state.sales)) {
                 is SyncResult.Ok -> {
                     mutate { st -> st.copy(sales = st.sales.map { it.copy(synced = true) }) }
+                    val pending = _ui.value.state.pendingChangeRequests
+                    val changeMsg = when (val cr = SyncClient.pushChangeRequests(_ui.value.sync, pending)) {
+                        is SyncResult.Ok -> {
+                            if (pending.isNotEmpty()) {
+                                mutate { it.copy(pendingChangeRequests = emptyList()) }
+                            }
+                            cr.message
+                        }
+                        is SyncResult.Err -> "Requests failed: ${cr.message}"
+                    }
                     val (pullResult, payload) = SyncClient.pullCatalog(_ui.value.sync)
                     when (pullResult) {
                         is SyncResult.Ok -> {
                             if (payload != null) mutate { SyncClient.mergeCatalog(it, payload) }
-                            flash("${upload.message}; ${pullResult.message}")
+                            flash("${upload.message}; $changeMsg; ${pullResult.message}")
                         }
                         is SyncResult.Err -> flash("Pull failed: ${pullResult.message}")
                     }
@@ -559,20 +664,41 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(countedCash = v.filter { ch -> ch.isDigit() || ch == '.' }) }
     }
 
+    fun setCashLeftOvernight(v: String) {
+        _ui.update { it.copy(cashLeftOvernight = v.filter { ch -> ch.isDigit() || ch == '.' }) }
+    }
+
     fun closeDay() {
         val cur = _ui.value
         val session = cur.state.session ?: return
         val expected = session.openingFloat + Pricing.sessionCashSales(cur.state)
         val counted = cur.countedCash.toDoubleOrNull() ?: expected
+        val left = cur.cashLeftOvernight.toDoubleOrNull()
+            ?: session.openingFloat.coerceAtMost(counted)
+        val bank = (counted - left).coerceAtLeast(0.0)
         val closed = session.copy(
             closedAt = Pricing.nowISO(),
             expectedCash = expected,
             countedCash = counted,
+            cashLeftOvernight = left,
+            bankDeposit = bank,
         )
-        mutate { it.copy(session = closed) }
+        mutate {
+            it.copy(
+                session = closed,
+                cashFloatCarry = left,
+            )
+        }
         printDayCloseReport(closed)
-        _ui.update { it.copy(screen = Screen.Login, countedCash = "", pin = "") }
-        flash("Day closed / 已日結")
+        _ui.update {
+            it.copy(
+                screen = Screen.Login,
+                countedCash = "",
+                cashLeftOvernight = "",
+                pin = "",
+            )
+        }
+        flash("Day closed — left ${Pricing.money(left)} / 已日結，淨低 ${Pricing.money(left)}")
     }
 
     fun fillCountedWithExpected() {
@@ -581,10 +707,33 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         _ui.update { it.copy(countedCash = "%.2f".format(expected)) }
     }
 
+    /** Prefill 淨低 with yesterday's opening float (or current float carry). */
+    fun fillCashLeftWithOpening() {
+        val session = _ui.value.state.session ?: return
+        val counted = _ui.value.countedCash.toDoubleOrNull()
+        val suggest = session.openingFloat
+        val left = if (counted != null) suggest.coerceAtMost(counted) else suggest
+        _ui.update { it.copy(cashLeftOvernight = "%.2f".format(left)) }
+    }
+
     fun printDayCloseReport(sessionOverride: com.store88.pos.domain.Session? = null) {
         viewModelScope.launch {
             val cur = _ui.value
-            val session = sessionOverride ?: cur.state.session ?: return@launch
+            val base = sessionOverride ?: cur.state.session ?: return@launch
+            val session = if (sessionOverride != null) {
+                base
+            } else {
+                val expected = base.openingFloat + Pricing.sessionCashSales(cur.state)
+                val counted = cur.countedCash.toDoubleOrNull() ?: expected
+                val left = cur.cashLeftOvernight.toDoubleOrNull()
+                    ?: base.openingFloat.coerceAtMost(counted)
+                base.copy(
+                    expectedCash = expected,
+                    countedCash = counted,
+                    cashLeftOvernight = left,
+                    bankDeposit = (counted - left).coerceAtLeast(0.0),
+                )
+            }
             val bytes = ReceiptFormatter.formatDayClose(
                 state = cur.state,
                 session = session,
@@ -626,13 +775,39 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    private fun enqueuePortalChange(type: String, summary: String, payloadJson: String) {
+        mutate { st ->
+            val req = PendingChangeRequest(
+                localId = "cr-${System.currentTimeMillis()}-${type}",
+                type = type,
+                summary = summary,
+                payloadJson = payloadJson,
+            )
+            // Keep latest request per type+summary key for same product id in payload
+            val filtered = st.pendingChangeRequests.filterNot {
+                it.type == type && it.summary == summary
+            }
+            st.copy(pendingChangeRequests = filtered + req)
+        }
+    }
+
     fun upsertProduct(product: Product) {
         mutate { st ->
             val list = st.products.toMutableList()
             val i = list.indexOfFirst { it.id == product.id }
             if (i >= 0) list[i] = product else list.add(0, product)
-            st.copy(products = list)
+            val fav = product.id in st.favouriteIds
+            val payload = SyncClient.productPayloadJson(product, fav)
+            val req = PendingChangeRequest(
+                localId = "cr-product-${product.id}",
+                type = "product_upsert",
+                summary = "Product ${product.nameEn}",
+                payloadJson = payload,
+            )
+            val pending = st.pendingChangeRequests.filterNot { it.localId == req.localId } + req
+            st.copy(products = list, pendingChangeRequests = pending)
         }
+        flash("Saved locally — Sync to request portal update")
     }
 
     fun deleteProduct(id: String) {
@@ -640,7 +815,19 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
             flash("Cannot delete custom price keys")
             return
         }
-        mutate { it.copy(products = it.products.filterNot { p -> p.id == id }) }
+        mutate { st ->
+            val req = PendingChangeRequest(
+                localId = "cr-product-del-$id",
+                type = "product_delete",
+                summary = "Delete product $id",
+                payloadJson = """{"id":"$id"}""",
+            )
+            st.copy(
+                products = st.products.filterNot { p -> p.id == id },
+                pendingChangeRequests = st.pendingChangeRequests.filterNot { it.localId == req.localId } + req,
+            )
+        }
+        flash("Deleted locally — Sync to request portal update")
     }
 
     fun upsertCategory(cat: Category) {
@@ -689,9 +876,16 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
                     expiryDate = expiry,
                 )
             } else st.lots
-            st.copy(products = products, lots = lots)
+            val lotPayload = """{"productId":"$productId","qty":$qty,"lotNumber":"${lotNumber ?: ""}","expiryDate":"${expiry ?: "2099-12-31"}"}"""
+            val req = PendingChangeRequest(
+                localId = "cr-lot-${System.currentTimeMillis()}",
+                type = "lot_receive",
+                summary = "Receive +$qty for $productId",
+                payloadJson = lotPayload,
+            )
+            st.copy(products = products, lots = lots, pendingChangeRequests = st.pendingChangeRequests + req)
         }
-        flash("Received +$qty")
+        flash("Received +$qty locally — Sync to request portal update")
     }
 
     fun markdownLot(lotId: String) {
@@ -706,7 +900,19 @@ class PosViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun updateReceiptConfig(cfg: ReceiptConfig) {
-        mutate { it.copy(receiptConfig = cfg) }
+        mutate { st ->
+            val req = PendingChangeRequest(
+                localId = "cr-receipt",
+                type = "receipt_update",
+                summary = "Receipt settings",
+                payloadJson = SyncClient.receiptPayloadJson(cfg),
+            )
+            st.copy(
+                receiptConfig = cfg,
+                pendingChangeRequests = st.pendingChangeRequests.filterNot { it.localId == "cr-receipt" } + req,
+            )
+        }
+        flash("Receipt saved locally — Sync to request portal update")
     }
 
     fun setAdminSearch(q: String) {

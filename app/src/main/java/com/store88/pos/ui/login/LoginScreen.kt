@@ -124,7 +124,7 @@ fun LoginScreen(ui: UiState, vm: PosViewModel) {
                     Text("Select Cashier / 選擇收銀員", fontWeight = FontWeight.Bold, fontSize = 14.sp)
                     Spacer(Modifier.height(12.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(16.dp)) {
-                        PosConstants.CASHIERS.forEach { c ->
+                        (ui.state.cashiers.ifEmpty { PosConstants.CASHIERS }).forEach { c ->
                             val selected = ui.selectedCashierId == c.id
                             Column(
                                 horizontalAlignment = Alignment.CenterHorizontally,
@@ -136,7 +136,7 @@ fun LoginScreen(ui: UiState, vm: PosViewModel) {
                                     .clickable { vm.selectCashier(c.id) }
                                     .padding(12.dp, 12.dp),
                             ) {
-                                Text(if (c.id == "amy") "👩" else "👨", fontSize = 44.sp)
+                                Text(if (c.id == "amy" || c.id.contains("a")) "👩" else "👨", fontSize = 44.sp)
                                 Text(c.nameZh, fontWeight = FontWeight.ExtraBold, fontSize = 18.sp)
                                 Text(c.name, color = TextMuted, fontSize = 12.sp)
                             }

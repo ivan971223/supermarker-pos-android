@@ -83,7 +83,7 @@ fun CheckoutScreen(ui: UiState, vm: PosViewModel) {
     val pages = ((filtered.size + pageSize - 1) / pageSize).coerceAtLeast(1)
     val page = ui.productPage.coerceIn(0, pages - 1)
     val pageItems = filtered.drop(page * pageSize).take(pageSize)
-    val cashierZh = com.store88.pos.domain.PosConstants.CASHIERS.find { it.name == state.session?.cashier }?.nameZh
+    val cashierZh = (state.cashiers.ifEmpty { com.store88.pos.domain.PosConstants.CASHIERS }).find { it.name == state.session?.cashier }?.nameZh
     val brand = vm.bi(state.shopName.ifBlank { "88 Store" }, state.shopNameZh.ifBlank { "88超市" })
     val cartTitle = when (state.uiLanguage) {
         "en" -> "Cart ($itemCount)"
@@ -128,6 +128,18 @@ fun CheckoutScreen(ui: UiState, vm: PosViewModel) {
             Spacer(Modifier.width(10.dp))
             StatusBlock("👤", "Cashier: ${state.session?.cashier}", "收銀員：${cashierZh ?: state.session?.cashier}")
             StatusBlock("🕐", "Session: ${vm.sessionClock()}", "機號：POS01${if (!ui.online) " · Offline" else ""}")
+            StatusBlock(
+                "🔄",
+                if (state.lastSyncAt == null) "Never synced" else "Synced ${vm.lastSyncLabel()}",
+                if (state.lastSyncAt == null) "未同步" else "同步：${vm.lastSyncLabel()}",
+            )
+            Text(
+                "🚪",
+                fontSize = 18.sp,
+                modifier = Modifier
+                    .clickable { vm.logoutCashier() }
+                    .padding(8.dp),
+            )
             Text("⋮", fontSize = 22.sp, modifier = Modifier.clickable { vm.toggleMore() }.padding(8.dp))
         }
 
@@ -144,12 +156,13 @@ fun CheckoutScreen(ui: UiState, vm: PosViewModel) {
                 item { LangSwitch(state.uiLanguage, vm, compact = true) }
                 item { MoreBtn("％ Discount / 折扣") { vm.setShowDiscount(true) } }
                 item { MoreBtn("⏸ Hold / 暫停") { vm.holdCart() } }
-                item { MoreBtn("🖨 Print / 列印") { vm.printLastReceipt() } }
+                item { MoreBtn("🖨 Last receipt / 列印上單") { vm.printLastReceipt() } }
                 item { MoreBtn("💰 Drawer / 開箱") { vm.openDrawer() } }
                 item { MoreBtn("📺 客顯") { vm.setShowCustomerPreview(true) } }
                 item { MoreBtn("🔄 Sync / 同步") { vm.syncNow() } }
                 item { MoreBtn("🧾 Txns / 交易") { vm.setScreen(Screen.Transactions) } }
                 item { MoreBtn("📅 Day Close / 日結") { vm.setScreen(Screen.DayClose) } }
+                item { MoreBtn("🚪 Logout / 登出") { vm.logoutCashier() } }
             }
         }
 
